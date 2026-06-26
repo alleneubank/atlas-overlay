@@ -31,7 +31,7 @@ The cleanest approach uses [numtide/nixpkgs-unfree](https://github.com/numtide/n
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     nixpkgs-unfree.url = "github:numtide/nixpkgs-unfree/nixos-unstable";
     nixpkgs-unfree.inputs.nixpkgs.follows = "nixpkgs";  # Use our nixpkgs version
-    atlas-overlay.url = "github:0xBigBoss/atlas-overlay";
+    atlas-overlay.url = "github:alleneubank/atlas-overlay";
     atlas-overlay.inputs.nixpkgs.follows = "nixpkgs-unfree";  # Inherit unfree config
   };
 
@@ -51,7 +51,7 @@ The cleanest approach uses [numtide/nixpkgs-unfree](https://github.com/numtide/n
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    atlas-overlay.url = "github:0xBigBoss/atlas-overlay";
+    atlas-overlay.url = "github:alleneubank/atlas-overlay";
   };
 
   outputs = { nixpkgs, atlas-overlay, ... }: let
@@ -71,7 +71,7 @@ The cleanest approach uses [numtide/nixpkgs-unfree](https://github.com/numtide/n
 ### Option C: Environment variable
 
 ```bash
-NIXPKGS_ALLOW_UNFREE=1 nix build --impure github:0xBigBoss/atlas-overlay
+NIXPKGS_ALLOW_UNFREE=1 nix build --impure github:alleneubank/atlas-overlay
 ```
 
 ## Usage
@@ -82,7 +82,7 @@ NIXPKGS_ALLOW_UNFREE=1 nix build --impure github:0xBigBoss/atlas-overlay
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    atlas-overlay.url = "github:0xBigBoss/atlas-overlay";
+    atlas-overlay.url = "github:alleneubank/atlas-overlay";
   };
 
   outputs = { nixpkgs, atlas-overlay, ... }: let
@@ -112,13 +112,13 @@ NIXPKGS_ALLOW_UNFREE=1 nix build --impure github:0xBigBoss/atlas-overlay
 ### Run directly
 
 ```bash
-nix run github:0xBigBoss/atlas-overlay -- version
+nix run github:alleneubank/atlas-overlay -- version
 ```
 
 ### Development shell
 
 ```bash
-nix develop github:0xBigBoss/atlas-overlay
+nix develop github:alleneubank/atlas-overlay
 atlas version
 ```
 
