@@ -125,8 +125,19 @@ atlas version
 ## Supported platforms
 
 - `x86_64-linux`
+- `aarch64-linux`
 - `x86_64-darwin`
 - `aarch64-darwin`
+
+## Maintenance
+
+`./update` discovers the latest Atlas release and rewrites `sources.json` for every
+system in its platform table. It also repairs an incomplete `sources.json` when the
+version is unchanged, so a platform cannot stay missing once it is added to the table.
+
+`./check-platforms` enforces the supported-platform contract: the updater's table, the
+keys in `sources.json`, the flake's package outputs, the derivation's `meta.platforms`
+and the list above must all name the same systems. It runs as part of `nix flake check`.
 
 ## License
 
@@ -136,4 +147,4 @@ The Atlas binary itself is distributed under the [Atlas EULA](https://ariga.io/l
 
 ## Version
 
-Current Atlas version: **v1.0.0**
+The pinned Atlas version and the per-platform binary hashes live in [`sources.json`](sources.json).

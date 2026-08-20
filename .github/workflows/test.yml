@@ -36,3 +36,11 @@ jobs:
         run: nix flake check --impure
         env:
           NIXPKGS_ALLOW_UNFREE: 1
+
+      - name: Check every supported system evaluates
+        run: nix flake check --all-systems --no-build --impure
+        env:
+          NIXPKGS_ALLOW_UNFREE: 1
+
+      - name: Test updater platform repair
+        run: ./test-update-repair

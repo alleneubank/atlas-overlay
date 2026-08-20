@@ -1,0 +1,123 @@
+#!/usr/bin/env nix-shell
+#! nix-shell -p jq coreutils -i bash
+# shellcheck shell=bash
+#
+# Verifies the supported-platform contract. The updater's platform table is the
+# authority; sources.json, the flake package outputs, the derivation's
+# meta.platforms and the README must all name exactly the same systems, and each
+# recorded URL must point at that system's binary at the locked version.
+#
+# Without arguments the flake facts are read with `nix eval`. The flake check
+# runs this inside a sandbox with no nix available and passes them as JSON files:
+#   --flake-systems FILE    JSON array of systems the flake builds packages for
+#   --meta-platforms FILE   JSON array from the atlas derivation's meta.platforms
+set -euo pipefail
+
+REPO_ROOT="${REPO_ROOT:-$(unset CDPATH; cd -- "$(dirname -- "$0")" && pwd)}"
+
+flake_systems_file=""
+meta_platforms_file=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --flake-systems) flake_systems_file="${2:?--flake-systems needs a file}"; shift 2 ;;
+    --meta-platforms) meta_platforms_file="${2:?--meta-platforms needs a file}"; shift 2 ;;
+    *) echo "Error: unknown argument '$1'" >&2; exit 2 ;;
+  esac
+done
+
+failures=0
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  failures=$((failures + 1))
+}
+
+# Compares two newline-separated sorted lists and reports both directions of drift.
+expect_same_set() {
+  local label="$1" expected="$2" actual="$3"
+  local only_expected only_actual
+  only_expected=$(comm -23 <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") | paste -sd' ' -)
+  only_actual=$(comm -13 <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") | paste -sd' ' -)
+  if [[ -n "$only_expected" ]]; then
+    fail "$label is missing: $only_expected"
+  fi
+  if [[ -n "$only_actual" ]]; then
+    fail "$label has unexpected entries: $only_actual"
+  fi
+}
+
+platform_map=$(bash "$REPO_ROOT/update" --print-platforms)
+expected_systems=$(jq -r 'keys_unsorted[]' <<<"$platform_map" | sort)
+echo "Expected systems (from ./update): $(paste -sd' ' - <<<"$expected_systems")"
+
+version=$(jq -r '.version' "$REPO_ROOT/sources.json")
+if [[ -z "$version" || "$version" == "null" ]]; then
+  fail "sources.json has no version"
+  version=""
+fi
+
+# sources.json keys
+sources_systems=$(jq -r '.platforms | keys_unsorted[]' "$REPO_ROOT/sources.json" | sort)
+expect_same_set "sources.json" "$expected_systems" "$sources_systems"
+
+# README documented platforms, taken from the "Supported platforms" section
+readme_systems=$(awk '
+  /^## Supported platforms$/ { inside = 1; next }
+  inside && /^## / { inside = 0 }
+  inside && /^- `[^`]+`$/ { gsub(/^- `/, ""); gsub(/`$/, ""); print }
+' "$REPO_ROOT/README.md" | sort)
+expect_same_set "README.md supported platforms" "$expected_systems" "$readme_systems"
+
+# Flake package outputs
+if [[ -n "$flake_systems_file" ]]; then
+  flake_systems=$(jq -r '.[]' "$flake_systems_file" | sort)
+else
+  flake_systems=""
+  while read -r system; do
+    [[ -n "$system" ]] || continue
+    if nix eval --raw "$REPO_ROOT#packages.$system.atlas.version" >/dev/null 2>&1; then
+      flake_systems+="$system"$'\n'
+    fi
+  done <<<"$sources_systems"
+  flake_systems=$(printf '%s' "$flake_systems" | sort)
+fi
+expect_same_set "flake package outputs" "$expected_systems" "$flake_systems"
+
+# Derivation meta.platforms
+if [[ -n "$meta_platforms_file" ]]; then
+  meta_platforms=$(jq -r '.[]' "$meta_platforms_file" | sort)
+else
+  first_system=$(head -n1 <<<"$expected_systems")
+  meta_platforms=$(nix eval --json "$REPO_ROOT#packages.$first_system.atlas.meta.platforms" | jq -r '.[]' | sort)
+fi
+expect_same_set "atlas meta.platforms" "$expected_systems" "$meta_platforms"
+
+# Each recorded URL must name that system's binary at the locked version.
+while read -r system; do
+  [[ -n "$system" ]] || continue
+  binary_name=$(jq -r --arg s "$system" '.[$s] // ""' <<<"$platform_map")
+  url=$(jq -r --arg s "$system" '.platforms[$s].url // ""' "$REPO_ROOT/sources.json")
+  sha256=$(jq -r --arg s "$system" '.platforms[$s].sha256 // ""' "$REPO_ROOT/sources.json")
+  if [[ -z "$binary_name" || -z "$url" ]]; then
+    continue # already reported as set drift
+  fi
+  expected_suffix="/atlas-${binary_name}-v${version}"
+  if [[ "$url" != *"$expected_suffix" ]]; then
+    fail "sources.json $system url does not end in '$expected_suffix': $url"
+  fi
+  if [[ -z "$sha256" ]]; then
+    fail "sources.json $system has no sha256"
+  fi
+done <<<"$sources_systems"
+
+# Distinct systems must not share a binary, which would silently ship a wrong arch.
+duplicate_binaries=$(jq -r '[.[]] | group_by(.) | map(select(length > 1) | .[0]) | .[]' <<<"$platform_map")
+if [[ -n "$duplicate_binaries" ]]; then
+  fail "./update maps multiple systems to the same binary: $(paste -sd' ' - <<<"$duplicate_binaries")"
+fi
+
+if [[ "$failures" -ne 0 ]]; then
+  echo "Platform contract check failed with $failures problem(s)." >&2
+  exit 1
+fi
+
+echo "Platform contract OK: $(wc -l <<<"$expected_systems" | tr -d ' ') systems agree at v$version."

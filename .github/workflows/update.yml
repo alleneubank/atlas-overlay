@@ -18,6 +18,11 @@ jobs:
       - name: Run update script
         run: ./update
 
+      - name: Verify platform contract
+        run: nix flake check --impure
+        env:
+          NIXPKGS_ALLOW_UNFREE: 1
+
       - name: Check for changes
         id: changes
         run: |

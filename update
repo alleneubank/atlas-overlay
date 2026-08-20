@@ -1,18 +1,42 @@
 #!/usr/bin/env nix-shell
-#! nix-shell -p curl jq -i bash
+#! nix-shell -p curl jq coreutils -i bash
 # shellcheck shell=bash
 set -euo pipefail
 
 ATLAS_UPDATE_SRV="${ATLAS_UPDATE_SRV:-https://atlasbinaries.com/atlas}"
 ATLAS_UPDATE_SRV_FALLBACK="${ATLAS_UPDATE_SRV_FALLBACK:-https://release.ariga.io/atlas}"
 
+# Platform mappings: nix system -> atlas binary name.
+# This list is the authority for which systems the overlay supports; sources.json,
+# the flake package outputs and the README are all checked against it by
+# ./check-platforms. Order is significant: it fixes key order in sources.json.
+PLATFORMS=(
+  "x86_64-linux:linux-amd64"
+  "aarch64-linux:linux-arm64"
+  "x86_64-darwin:darwin-amd64"
+  "aarch64-darwin:darwin-arm64"
+)
+
+# Expose the mapping so the contract checker reads it instead of re-declaring it.
+# Handled before any network work so it stays a cheap, offline query.
+if [[ "${1:-}" == "--print-platforms" ]]; then
+  printf '%s\n' "${PLATFORMS[@]}" |
+    jq -R 'split(":") | {(.[0]): .[1]}' |
+    jq -s 'add'
+  exit 0
+fi
+if [[ $# -gt 0 ]]; then
+  echo "Error: unknown argument '$1' (expected none or --print-platforms)" >&2
+  exit 2
+fi
+
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 # Pick the platform string used by Atlas installers and download "latest" to discover current version.
-PLATFORM_HOST="linux-amd64"
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) PLATFORM_HOST="linux-amd64" ;;
+  Linux-aarch64|Linux-arm64) PLATFORM_HOST="linux-arm64" ;;
   Darwin-x86_64|Darwin-x86-64|Darwin-amd64) PLATFORM_HOST="darwin-amd64" ;;
   Darwin-arm64|Darwin-aarch64|Darwin-armv8l) PLATFORM_HOST="darwin-arm64" ;;
   *)
@@ -49,67 +73,81 @@ fi
 VERSION="${VERSION#v}"
 echo "Latest version: $VERSION"
 
-# Check current version
 CURRENT_VERSION=$(jq -r '.version' sources.json)
-if [[ "$CURRENT_VERSION" == "$VERSION" ]]; then
-  echo "Already up to date (v$VERSION)"
+
+# A matching version is not enough: an entry can be missing or point at the wrong
+# binary, so treat an incomplete sources.json as work to do even at the same version.
+stale=""
+for entry in "${PLATFORMS[@]}"; do
+  system="${entry%%:*}"
+  binary_name="${entry#*:}"
+  url=$(jq -r --arg s "$system" '.platforms[$s].url // ""' sources.json)
+  sha256=$(jq -r --arg s "$system" '.platforms[$s].sha256 // ""' sources.json)
+  if [[ -z "$url" || -z "$sha256" || "$url" != *"/atlas-${binary_name}-v${VERSION}" ]]; then
+    stale="$stale $system"
+  fi
+done
+stale="${stale# }"
+
+if [[ "$CURRENT_VERSION" == "$VERSION" && -z "$stale" ]]; then
+  echo "Already up to date (v$VERSION, ${#PLATFORMS[@]} platforms)"
   exit 0
 fi
 
-echo "Updating from v$CURRENT_VERSION to v$VERSION"
-
-# Platform mappings: nix system -> atlas binary name
-declare -A PLATFORMS=(
-  ["x86_64-linux"]="linux-amd64"
-  ["x86_64-darwin"]="darwin-amd64"
-  ["aarch64-darwin"]="darwin-arm64"
-)
+if [[ "$CURRENT_VERSION" == "$VERSION" ]]; then
+  echo "Version v$VERSION unchanged; repairing platform entries: $stale"
+else
+  echo "Updating from v$CURRENT_VERSION to v$VERSION"
+fi
 
 # Fetch SHA256 hashes for each platform
-for system in "${!PLATFORMS[@]}"; do
-  binary_name="${PLATFORMS[$system]}"
+for entry in "${PLATFORMS[@]}"; do
+  system="${entry%%:*}"
+  binary_name="${entry#*:}"
+
+  echo "Fetching hash for $system..."
+
+  sha256=""
+  url=""
   for server in "$ATLAS_UPDATE_SRV" "$ATLAS_UPDATE_SRV_FALLBACK"; do
     if [[ -z "$server" ]]; then
       continue
     fi
     url="$server/atlas-${binary_name}-v${VERSION}"
-    sha256=$(nix-prefetch-url "$url" 2>/dev/null)
-    if [[ -n "$sha256" ]]; then
+    # Guarded so a failing mirror falls through to the fallback instead of set -e.
+    if sha256=$(nix-prefetch-url "$url" 2>/dev/null) && [[ -n "$sha256" ]]; then
       break
     fi
     sha256=""
   done
 
-  echo "Fetching hash for $system..."
-
   if [[ -z "$sha256" ]]; then
-    echo "Error: Failed to fetch $url"
+    echo "Error: Failed to fetch atlas-${binary_name}-v${VERSION} from any server"
     exit 1
   fi
 
   echo "  $system: $sha256"
 
-  # Store platform data
   jq -n \
     --arg url "$url" \
     --arg sha256 "$sha256" \
     '{"url": $url, "sha256": $sha256}' > "$TMP_DIR/$system.json"
 done
 
-# Build new sources.json
+# Build new sources.json, preserving PLATFORMS order
 echo "Writing sources.json..."
+platforms_json="{}"
+for entry in "${PLATFORMS[@]}"; do
+  system="${entry%%:*}"
+  platforms_json=$(jq \
+    --arg system "$system" \
+    --argjson source "$(cat "$TMP_DIR/$system.json")" \
+    '. + {($system): $source}' <<<"$platforms_json")
+done
+
 jq -n \
   --arg version "$VERSION" \
-  --argjson x86_64_linux "$(cat "$TMP_DIR/x86_64-linux.json")" \
-  --argjson x86_64_darwin "$(cat "$TMP_DIR/x86_64-darwin.json")" \
-  --argjson aarch64_darwin "$(cat "$TMP_DIR/aarch64-darwin.json")" \
-  '{
-    "version": $version,
-    "platforms": {
-      "x86_64-linux": $x86_64_linux,
-      "x86_64-darwin": $x86_64_darwin,
-      "aarch64-darwin": $aarch64_darwin
-    }
-  }' > sources.json
+  --argjson platforms "$platforms_json" \
+  '{"version": $version, "platforms": $platforms}' > sources.json
 
 echo "Updated to v$VERSION"
