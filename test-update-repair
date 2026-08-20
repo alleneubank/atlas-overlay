@@ -1,0 +1,124 @@
+#!/usr/bin/env nix-shell
+#! nix-shell -p jq coreutils curl -i bash
+# shellcheck shell=bash
+#
+# Hermetic offline test for ./update's platform-completeness logic. A fake
+# release server is served over file:// URLs, so this touches no network and
+# pins no real Atlas version.
+set -euo pipefail
+
+REPO_ROOT="${REPO_ROOT:-$(unset CDPATH; cd -- "$(dirname -- "$0")" && pwd)}"
+VERSION="9.9.9-test"
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+srv="$work/srv"
+repo="$work/repo"
+mkdir -p "$srv" "$repo"
+
+# Fake "latest" binary for every possible host, plus a payload per platform.
+for host in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+  printf '#!/bin/sh\necho "atlas version v%s"\n' "$VERSION" > "$srv/atlas-$host-latest"
+  chmod +x "$srv/atlas-$host-latest"
+  printf 'fake atlas %s v%s\n' "$host" "$VERSION" > "$srv/atlas-$host-v$VERSION"
+done
+
+cp "$REPO_ROOT/update" "$repo/update"
+cd "$repo"
+
+# Captures stdout+stderr in $out and the exit status in $rc. Both are asserted:
+# a crashed updater leaves sources.json untouched, which would otherwise let
+# file-only assertions pass vacuously.
+run_update() {
+  set +e
+  out=$(ATLAS_UPDATE_SRV="file://$srv" ATLAS_UPDATE_SRV_FALLBACK="" bash ./update 2>&1)
+  rc=$?
+  set -e
+}
+
+write_sources() { # $1 = version, remaining args = systems to include
+  local v="$1"; shift
+  local json='{}'
+  local system binary
+  for system in "$@"; do
+    case "$system" in
+      x86_64-linux) binary="linux-amd64" ;;
+      aarch64-linux) binary="linux-arm64" ;;
+      x86_64-darwin) binary="darwin-amd64" ;;
+      aarch64-darwin) binary="darwin-arm64" ;;
+      *) echo "test bug: unknown system $system" >&2; exit 2 ;;
+    esac
+    json=$(jq \
+      --arg s "$system" \
+      --arg url "file://$srv/atlas-$binary-v$v" \
+      '. + {($s): {url: $url, sha256: "0000000000000000000000000000000000000000000000000000"}}' \
+      <<<"$json")
+  done
+  jq -n --arg version "$v" --argjson platforms "$json" \
+    '{"version": $version, "platforms": $platforms}' > sources.json
+}
+
+failures=0
+out=""
+rc=0
+check() { # $1 = description, $2 = condition already evaluated as ok/not
+  if [[ "$2" == "ok" ]]; then
+    echo "  PASS: $1"
+  else
+    echo "  FAIL: $1" >&2
+    echo "    updater rc=$rc, output:" >&2
+    awk '{print "    | " $0}' <<<"$out" >&2
+    failures=$((failures + 1))
+  fi
+}
+
+echo "case 1: same version, aarch64-linux missing -> repaired"
+write_sources "$VERSION" x86_64-linux x86_64-darwin aarch64-darwin
+run_update
+[[ "$rc" -eq 0 ]] && r=ok || r=no
+check "updater exited 0" "$r"
+grep -q "repairing platform entries: aarch64-linux" <<<"$out" && r=ok || r=no
+check "took the repair path" "$r"
+[[ "$(jq -r '.platforms | keys_unsorted | join(",")' sources.json)" \
+   == "x86_64-linux,aarch64-linux,x86_64-darwin,aarch64-darwin" ]] && r=ok || r=no
+check "wrote all four platforms in table order" "$r"
+[[ "$(jq -r '.version' sources.json)" == "$VERSION" ]] && r=ok || r=no
+check "kept the version" "$r"
+
+echo "case 2: complete state -> idempotent no-op"
+before=$(cat sources.json)
+run_update
+[[ "$rc" -eq 0 ]] && r=ok || r=no
+check "updater exited 0" "$r"
+grep -q "Already up to date" <<<"$out" && r=ok || r=no
+check "reported already up to date" "$r"
+[[ "$before" == "$(cat sources.json)" ]] && r=ok || r=no
+check "left sources.json byte-identical" "$r"
+
+echo "case 3: older version -> full update"
+write_sources "1.0.0-old" x86_64-linux aarch64-linux x86_64-darwin aarch64-darwin
+run_update
+[[ "$rc" -eq 0 ]] && r=ok || r=no
+check "updater exited 0" "$r"
+grep -q "Updating from v1.0.0-old to v$VERSION" <<<"$out" && r=ok || r=no
+check "took the version-bump path" "$r"
+[[ "$(jq -r '.platforms | keys_unsorted | length' sources.json)" == "4" ]] && r=ok || r=no
+check "wrote all four platforms" "$r"
+
+echo "case 4: same version, entry points at the wrong arch -> repaired"
+write_sources "$VERSION" x86_64-linux aarch64-linux x86_64-darwin aarch64-darwin
+jq --arg url "file://$srv/atlas-linux-amd64-v$VERSION" \
+  '.platforms["aarch64-linux"].url = $url' sources.json > sources.tmp && mv sources.tmp sources.json
+run_update
+[[ "$rc" -eq 0 ]] && r=ok || r=no
+check "updater exited 0" "$r"
+grep -q "repairing platform entries: aarch64-linux" <<<"$out" && r=ok || r=no
+check "detected the wrong-arch url" "$r"
+[[ "$(jq -r '.platforms["aarch64-linux"].url' sources.json)" == "file://$srv/atlas-linux-arm64-v$VERSION" ]] && r=ok || r=no
+check "restored the correct url" "$r"
+
+if [[ "$failures" -ne 0 ]]; then
+  echo "update repair test failed with $failures problem(s)." >&2
+  exit 1
+fi
+echo "update repair test OK."

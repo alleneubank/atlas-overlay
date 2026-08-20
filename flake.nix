@@ -19,6 +19,20 @@
     version = sources.version;
     systems = builtins.attrNames sources.platforms;
 
+    # Only the files the platform contract is derived from, so the check does not
+    # rebuild on unrelated edits.
+    contractSrc = builtins.path {
+      name = "atlas-platform-contract-src";
+      path = ./.;
+      filter = path: _type:
+        builtins.elem (baseNameOf path) [
+          "README.md"
+          "check-platforms"
+          "sources.json"
+          "update"
+        ];
+    };
+
     outputs = flake-utils.lib.eachSystem systems (system: let
       pkgs = nixpkgs-unfree.legacyPackages.${system};
       source = sources.platforms.${system};
@@ -73,6 +87,20 @@
       devShells.default = pkgs.mkShell {
         packages = [atlas];
       };
+
+      checks.platform-contract = pkgs.runCommand "atlas-platform-contract" {
+        nativeBuildInputs = [pkgs.bash pkgs.coreutils pkgs.jq];
+        # nix is unavailable in the sandbox, so hand the checker the evaluated
+        # flake facts instead of letting it shell out for them.
+        flakeSystems = builtins.toJSON systems;
+        metaPlatforms = builtins.toJSON atlas.meta.platforms;
+        passAsFile = ["flakeSystems" "metaPlatforms"];
+      } ''
+        REPO_ROOT=${contractSrc} bash ${contractSrc}/check-platforms \
+          --flake-systems "$flakeSystemsPath" \
+          --meta-platforms "$metaPlatformsPath"
+        touch $out
+      '';
     });
   in
     outputs
