@@ -1,21 +1,21 @@
 {
-  "version": "1.3.3-98f69f6-canary",
+  "version": "1.3.3",
   "platforms": {
     "x86_64-linux": {
-      "url": "https://atlasbinaries.com/atlas/atlas-linux-amd64-v1.3.3-98f69f6-canary",
-      "sha256": "0v2hp6jrw0jb5sx3923rp3b64nprcxwc1ggnilsxxzfyxqadmrxn"
+      "url": "https://atlasbinaries.com/atlas/atlas-linux-amd64-v1.3.3",
+      "sha256": "15ib24f09716j5avxl4jhwvk8fawfak175l2zmiy7ldab9msc7m4"
     },
     "aarch64-linux": {
-      "url": "https://atlasbinaries.com/atlas/atlas-linux-arm64-v1.3.3-98f69f6-canary",
-      "sha256": "108bxm1825giyf9afjnjh9cnjcbfxryccj9i6x8xk90vy39wz7s4"
+      "url": "https://atlasbinaries.com/atlas/atlas-linux-arm64-v1.3.3",
+      "sha256": "0zz0s806qqkasjbrg2sl82690sfa686mpcs86xb43ivi57fyci40"
     },
     "x86_64-darwin": {
-      "url": "https://atlasbinaries.com/atlas/atlas-darwin-amd64-v1.3.3-98f69f6-canary",
-      "sha256": "1zzfk16p7p8dfsk2296araj4fy3lhmq2hllqbcjqxpcdcvwkknv2"
+      "url": "https://atlasbinaries.com/atlas/atlas-darwin-amd64-v1.3.3",
+      "sha256": "1d6bl4m7mmjjbpg53qxkvln97264fx3zmgzq5ms9v4lrl5r228ma"
     },
     "aarch64-darwin": {
-      "url": "https://atlasbinaries.com/atlas/atlas-darwin-arm64-v1.3.3-98f69f6-canary",
-      "sha256": "0pnpiha3xnyjkn5mzicnpzjy899xp822dnpnb393ii8kn5dhhdk6"
+      "url": "https://atlasbinaries.com/atlas/atlas-darwin-arm64-v1.3.3",
+      "sha256": "0gl0yy7n02jhdn6w9jhpp599fh899573lbzkyx05lzk3c776p1ar"
     }
   }
 }
